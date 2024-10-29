@@ -7,7 +7,9 @@ import warnings
 import time
 import math
 import random
+import uuid
 import wandb
+import yaml
 import builtins
 import numpy as np
 
@@ -18,11 +20,8 @@ import torch.distributed as dist
 from torchvision import transforms, datasets
 
 from utils.util import *
-# from utils.cub import CUB
-# from utils.fgvc_aircraft import FGVCAircraft
-from utils.flowers import FlowersDataset
-from utils.tinyimagenet import TinyImageNet
-from utils.imagenet import ImageNetSubset
+from utils.datasets import get_set
+
 from networks.resnet_big import ConResNet, LinearClassifier
 from networks.vgg_big import ConVGG, LinearClassifier_VGG
 from networks.wrn_big import ConWRN, LinearClassifier_WRN
@@ -33,6 +32,7 @@ def parse_option():
     parser = argparse.ArgumentParser('argument for training')
 
     parser.add_argument('--exp_name', type=str, default='')
+    parser.add_argument('--project_name', type=str, default='')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--print_freq', type=int, default=10)
     parser.add_argument('--save_dir', type=str, default='./save/representation')
@@ -42,10 +42,26 @@ def parse_option():
                         help='measure the accuracy of sub-network or not')
 
     # dataset
-    parser.add_argument('--dataset', type=str, default='imagenet', choices=['cifar10', 'flowers', 'cifar100', 'tinyimagenet', 'imagenet', 'imagenet100', 'cub', 'aircraft'])
-    parser.add_argument('--data_folder', type=str, default='datasets/')
+    parser.add_argument('--dataset_name', type=str, default='imagenet', choices=[
+        'cifar10', 'flowers', 'cifar100', 
+        'tinyimagenet', 'imagenet', 'imagenet100', 
+        'cub', 'aircraft', 'cars'])
+    
+    parser.add_argument('--data_cfg', type=str, default='configs/datasets/flowers.yml')
     parser.add_argument('--batch_size', type=int, default=256)
-    parser.add_argument('--num_workers', type=int, default=16)
+    parser.add_argument('--num_workers', type=int, default=12)
+
+    parser.add_argument('--dataset_root_path', type=str, default='../../data/flowers/', help='Path to the training.')
+    parser.add_argument('--train_trainval', action='store_true', help='True to use train_val split for training')
+    parser.add_argument('--df_train', type=str, default='train.csv', help='Path to the training dataset CSV file.')
+    parser.add_argument('--df_trainval', type=str, default='train_val.csv', help='Path to the train-validation dataset CSV file.')
+    parser.add_argument('--df_val', type=str, default='val.csv', help='Path to the validation dataset CSV file.')
+    parser.add_argument('--df_test', type=str, default='test.csv', help='Path to the test dataset CSV file.')
+
+    parser.add_argument('--folder_train', type=str, default='jpg', help='Folder path for training images.')
+    parser.add_argument('--folder_val', type=str, default='jpg', help='Folder path for validation images.')
+    parser.add_argument('--folder_test', type=str, default='jpg', help='Folder path for test images.')
+
 
     # model 
     parser.add_argument('--model', type=str, default='resnet50')
@@ -76,7 +92,7 @@ def parse_option():
         opt.lr_decay_epochs.append(int(it))
 
     opt.model_name = '{}_{}_lr_{}_decay_{}_bsz_{}'.\
-        format(opt.dataset, opt.model, opt.learning_rate, opt.weight_decay,
+        format(opt.dataset_name, opt.model, opt.learning_rate, opt.weight_decay,
                opt.batch_size)
 
     if opt.cosine:
@@ -94,167 +110,78 @@ def parse_option():
         else:
             opt.warmup_to = opt.learning_rate
 
-    if opt.dataset == 'cifar10':
+    if opt.dataset_name == 'cifar10':
         opt.n_cls = 10
-    elif opt.dataset == 'cub':
+    elif opt.dataset_name == 'cub':
       opt.n_cls = 200 
-    elif opt.dataset == 'aircraft':
+    elif opt.dataset_name == 'aircraft':
       opt.n_cls = 200
-    elif opt.dataset == 'cifar100':
+    elif opt.dataset_name == 'cifar100':
         opt.n_cls = 100
-    elif opt.dataset == 'tinyimagenet':
+    elif opt.dataset_name == 'tinyimagenet':
         opt.n_cls = 200
-    elif opt.dataset == 'imagenet':
+    elif opt.dataset_name == 'imagenet':
         opt.n_cls = 1000
-    elif opt.dataset == 'imagenet100':
+    elif opt.dataset_name == 'imagenet100':
         opt.n_cls = 100
-    elif opt.dataset == 'flowers':
+    elif opt.dataset_name == 'flowers':
         opt.n_cls = 102
     else:
-        raise ValueError('dataset not supported: {}'.format(opt.dataset))
+        raise ValueError('dataset not supported: {}'.format(opt.dataset_name))
 
     return opt
 
 
 def set_loader(opt):
     # construct data loader
-    if opt.dataset == 'cifar10':
+    if opt.dataset_name == 'cifar10':
         mean = (0.4914, 0.4822, 0.4465)
         std = (0.2023, 0.1994, 0.2010)
         size = 32
-    elif opt.dataset == 'cifar100':
+    elif opt.dataset_name == 'cifar100':
         mean = (0.5071, 0.4867, 0.4408)
         std = (0.2675, 0.2565, 0.2761)
         size = 32
 
-    elif opt.dataset in ['cub', 'aircraft', 'car', 'flowers']:
+    elif opt.dataset_name in ['cub', 'aircraft', 'car', 'flowers']:
         mean = (0.485, 0.456, 0.406)
         std = (0.229, 0.224, 0.225)
         size = 224
-    elif opt.dataset == 'tinyimagenet':
+    elif opt.dataset_name == 'tinyimagenet':
         mean = (0.485, 0.456, 0.406)
         std = (0.229, 0.224, 0.225)
         size = 64
-    elif opt.dataset == 'imagenet':
+    elif opt.dataset_name == 'imagenet':
         mean = (0.485, 0.456, 0.406)
         std = (0.229, 0.224, 0.225)
         size = 224
-    elif opt.dataset == 'imagenet100':
+    elif opt.dataset_name == 'imagenet100':
         mean = (0.485, 0.456, 0.406)
         std = (0.229, 0.224, 0.225)
         size = 224
     else:
-        raise ValueError('dataset not supported: {}'.format(opt.dataset))
+        raise ValueError('dataset not supported: {}'.format(opt.dataset_name))
     normalize = transforms.Normalize(mean=mean, std=std)
 
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(size=size, scale=(0.2, 1.)),
-        transforms.RandomHorizontalFlip(), #  transforms.ToTensor(),
+        transforms.RandomHorizontalFlip(), transforms.ToTensor(),
         normalize
     ])
 
-    
-#     if opt.randaug:
-#         train_transform.transforms.insert(0, RandAugment(2, 9))
-
-    if opt.dataset in ['imagenet', 'imagenet100']:
+    if opt.dataset_name in ['imagenet', 'imagenet100']:
         val_transform = transforms.Compose([
-            # transforms.ToTensor(),
+            transforms.ToTensor(),
             normalize,
         ])
     else:
         val_transform = transforms.Compose([transforms.Resize(256),
                                            transforms.CenterCrop(224),
-                                        #    transforms.ToTensor(),
+                                           transforms.ToTensor(),
                                            normalize])
 
-    if opt.dataset == 'cifar10':
-        train_dataset = datasets.CIFAR10(root=opt.data_folder,
-                                         transform=train_transform,
-                                         download=True)
-        val_dataset = datasets.CIFAR10(root=opt.data_folder,
-                                       train=False,
-                                       transform=val_transform)
-    elif opt.dataset == 'cub':
-        train_dataset = CUB(
-          imgz_tensors_pth = '/content/drive/MyDrive/Experimental-Results-Reproduction/Self-Contrasitive-Learning/self-contrastive-learning/datasets/CUB/imgs_64x64.pth',
-          metadata_pth = '/content/drive/MyDrive/Experimental-Results-Reproduction/Self-Contrasitive-Learning/self-contrastive-learning/datasets/CUB/metadata.pth',
-          transform = train_transform,
-          split='train'
-        )
-
-        val_dataset = CUB(
-          imgz_tensors_pth = '/content/drive/MyDrive/Experimental-Results-Reproduction/Self-Contrasitive-Learning/self-contrastive-learning/datasets/CUB/imgs_train_val_64x64.pth',
-          metadata_pth = '/content/drive/MyDrive/Experimental-Results-Reproduction/Self-Contrasitive-Learning/self-contrastive-learning/datasets/CUB/metadata.pth',
-          transform = val_transform,
-          split='val'
-        )
-    elif opt.dataset == 'aircraft':
-        train_dataset = FGVCAircraft(
-          img_path = '/content/drive/MyDrive/Experimental-Results-Reproduction/Self-Contrasitive-Learning/self-contrastive-learning/datasets/FGVC-Aircraft/fgvc-aircraft-2013b/fgvc-aircraft-2013b/data/images',
-          metadata_path = '/content/drive/MyDrive/Experimental-Results-Reproduction/Self-Contrasitive-Learning/self-contrastive-learning/datasets/FGVC-Aircraft/train.csv',
-          transform = train_transform
-          
-        )
-
-        val_dataset = FGVCAircraft(
-        img_path = '/content/drive/MyDrive/Experimental-Results-Reproduction/Self-Contrasitive-Learning/self-contrastive-learning/datasets/FGVC-Aircraft/fgvc-aircraft-2013b/fgvc-aircraft-2013b/data/images',
-        metadata_path = '/content/drive/MyDrive/Experimental-Results-Reproduction/Self-Contrasitive-Learning/self-contrastive-learning/datasets/FGVC-Aircraft/val.csv',
-        transform = val_transform
-        
-      )
-
-    elif opt.dataset == 'cifar100':
-        train_dataset = datasets.CIFAR100(root=opt.data_folder,
-                                          transform=train_transform,
-                                          download=True)
-        val_dataset = datasets.CIFAR100(root=opt.data_folder,
-                                        train=False,
-                                        transform=val_transform)
-    elif opt.dataset == 'tinyimagenet':
-        train_dataset = TinyImageNet(root=opt.data_folder,
-                                     transform=train_transform,
-                                     download=True)
-        val_dataset = TinyImageNet(root=opt.data_folder,
-                                   train=False,
-                                   transform=val_transform)
-    elif opt.dataset == 'imagenet':
-        traindir = os.path.join(opt.data_folder, 'train')
-        train_dataset = datasets.ImageFolder(root=traindir,
-                                     transform=train_transform)
-        
-        valdir = os.path.join(opt.data_folder, 'val')
-        val_dataset = datasets.ImageFolder(root=valdir,
-                                           transform=val_transform)
-    elif opt.dataset == 'imagenet100':
-        traindir = os.path.join(opt.data_folder, 'train')
-        train_dataset = ImageNetSubset('./utils/imagenet100.txt',
-                                       root=traindir,
-                                       transform=train_transform)
-        
-        valdir = os.path.join(opt.data_folder, 'val')
-        val_dataset = ImageNetSubset('./utils/imagenet100.txt',
-                                     root=valdir,
-                                     transform=val_transform)
-    elif opt.dataset == 'flowers':
-        images_path  = os.path.join(opt.data_folder, 'jpg')
-        train_labels_path = os.path.join(opt.data_folder, 'train_val.csv')
-        val_labels_path = os.path.join(opt.data_folder, 'test.csv')
-
-        train_dataset = FlowersDataset(
-            images_path,
-            train_labels_path,
-            train_transform
-        )
-
-        val_dataset = FlowersDataset(
-            images_path,
-            val_labels_path,
-            val_transform
-
-        )
-    else:
-        raise ValueError(opt.dataset)
+    train_dataset = get_set(opt, split='train', transform=train_transform)
+    val_dataset = get_set(opt, split='val', transform=val_transform)
 
     train_sampler = None
     train_loader = torch.utils.data.DataLoader(
@@ -269,7 +196,7 @@ def set_loader(opt):
 
 def set_model(opt):
     model_kwargs = {'name': opt.model, 
-                    'dataset': opt.dataset,
+                    'dataset': opt.dataset_name,
                     'selfcon_pos': eval(opt.selfcon_pos),
                     'selfcon_arch': opt.selfcon_arch,
                     'selfcon_size': opt.selfcon_size
@@ -475,11 +402,16 @@ def validate(val_loader, model, classifier, sub_classifier, criterion, opt, best
 def main():
     opt = parse_option()
 
+    data_config = yaml.safe_load(open(opt.data_cfg, 'r'))
+    for key, value in data_config.items():
+        if hasattr(opt, key):
+            setattr(opt, key, value)
+
     wandb.init(
         
-        project="SelfCon Flowers102 Results Reproduction",
-        name="Resnet18-CF100/Flowers-Finetuning",
-        id="07zm4kkg",
+        project=opt.project_name,
+        name=opt.model_name,
+        id=f'{str(uuid.uuid4())[:5]}',
         config = opt
     )
     

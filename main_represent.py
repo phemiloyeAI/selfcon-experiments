@@ -5,24 +5,20 @@ import sys
 import argparse
 import time
 import math
-import copy
+import yaml
 import random
 import builtins
 import numpy as np
 
 import torch
 import torch.backends.cudnn as cudnn
-from torchvision import transforms, dataset
-# from RandAugment import RandAugment
+from torchvision import transforms, datasets
 
-from uuid import uuid5
+import uuid 
 from losses import ConLoss
 from utils.util import *
 from utils.datasets import get_set
 
-from utils.flowers import FlowersDataset
-from utils.tinyimagenet import TinyImageNet
-from utils.imagenet import ImageNetSubset
 from networks.resnet_big import ConResNet
 from networks.vgg_big import ConVGG
 from networks.wrn_big import ConWRN
@@ -35,6 +31,7 @@ def parse_option():
     parser = argparse.ArgumentParser('argument for training')
     
     parser.add_argument('--exp_name', type=str, default='')
+    parser.add_argument('--project_name', type=str, default='')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--print_freq', type=int, default=10)
     parser.add_argument('--save_freq', type=int, default=0)
@@ -43,11 +40,14 @@ def parse_option():
                         default='')
 
     # dataset
-    parser.add_argument('--dataset_name', type=str, default='cifar10', choices=['cub', 'flowers', 'aircraft', 'car', 'cifar10', 'cifar100', 'tinyimagenet', 'imagenet', 'imagenet100'])
+    parser.add_argument('--dataset_name', type=str, default='flowers', choices=['cub', 'flowers', 'aircraft', 'car', 'cifar10', 'cifar100', 'tinyimagenet', 'imagenet', 'imagenet100'])
     parser.add_argument('--data_cfg', type=str, default='configs/datasets/flowers.yml')
     parser.add_argument('--batch_size', type=int, default=256)
-    parser.add_argument('--num_workers', type=int, default=16)
+    parser.add_argument('--num_workers', type=int, default=12)
     
+    
+    parser.add_argument('--dataset_root_path', type=str, default='../../data/flowers/', help='Path to the training.')
+    parser.add_argument('--train_trainval', action='store_true', help='True to use train_val split for training')
     parser.add_argument('--df_train', type=str, default='train.csv', help='Path to the training dataset CSV file.')
     parser.add_argument('--df_trainval', type=str, default='train_val.csv', help='Path to the train-validation dataset CSV file.')
     parser.add_argument('--df_val', type=str, default='val.csv', help='Path to the validation dataset CSV file.')
@@ -180,7 +180,7 @@ def build_dataloader(opt):
         std = (0.2675, 0.2565, 0.2761)
         size = 32
         
-    elif opt.dataset_name in  ['cub', 'aircraft', 'car', 'flowers']:
+    elif opt.dataset_name in  ['cub', 'aircraft', 'car', 'flowers', 'cars']:
         mean = (0.485, 0.456, 0.406)
         std = (0.229, 0.224, 0.225)
         size = 224
@@ -202,7 +202,7 @@ def build_dataloader(opt):
         transform += [transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
                       transforms.RandomGrayscale(p=0.2)]
 
-    if opt.dataset_name in ['cub', 'aircraft', 'flowers', 'car']:
+    if not opt.dataset_name in ['cub', 'aircraft', 'flowers', 'cars']:
       transform += [normalize]
     else:
       transform += [transforms.ToTensor(), normalize]
@@ -215,36 +215,6 @@ def build_dataloader(opt):
     
     train_dataset = get_set(opt, split='train', transform=train_transform)
 
-    # if opt.dataset_name == 'cub':
-    #   train_dataset_name = CUB(
-    #     imgz_tensors_pth = '/content/drive/MyDrive/Experimental-Results-Reproduction/Self-Contrasitive-Learning/self-contrastive-learning/dataset_names/CUB/imgs_64x64.pth',
-    #     metadata_pth = '/content/drive/MyDrive/Experimental-Results-Reproduction/Self-Contrasitive-Learning/self-contrastive-learning/dataset_names/CUB/metadata.pth',
-    #     transform = train_transform,
-    #     split='train'
-    #   )
-    
-    # elif opt.dataset_name == 'aircraft':
-    #   train_dataset_name = FGVCAircraft(
-    #     img_path = '/content/drive/MyDrive/Experimental-Results-Reproduction/Self-Contrasitive-Learning/self-contrastive-learning/dataset_names/FGVC-Aircraft/fgvc-aircraft-2013b/fgvc-aircraft-2013b/data/images',
-    #     metadata_path = '/content/drive/MyDrive/Experimental-Results-Reproduction/Self-Contrasitive-Learning/self-contrastive-learning/dataset_names/FGVC-Aircraft/train.csv',
-    #     transform = train_transform
-        
-    #   )
-
-
-    # elif opt.dataset_name == 'flowers':
-    #     images_path  = os.path.join(opt.data_folder, 'jpg')
-    #     labels_path = os.path.join(opt.data_folder, 'train_val.csv')
-
-    #     train_dataset_name = Flowersdataset_name(
-    #         images_path,
-    #         labels_path,
-    #         train_transform
-    #     )
-
-    # else:
-    #     raise ValueError(opt.dataset_name)
-
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=opt.batch_size, shuffle=True,
         num_workers=opt.num_workers, pin_memory=True, sampler=None)
@@ -253,7 +223,7 @@ def build_dataloader(opt):
 
 def set_model(opt):
     model_kwargs = {'name': opt.model, 
-                    'dataset_name': opt.dataset_name,
+                    'dataset': opt.dataset_name,
                     'selfcon_pos': eval(opt.selfcon_pos),
                     'selfcon_arch': opt.selfcon_arch,
                     'selfcon_size': opt.selfcon_size
@@ -266,7 +236,7 @@ def set_model(opt):
         model = ConWRN(**model_kwargs)
     elif opt.model.startswith('eff'):
         model = ConEfficientNet(**model_kwargs)
-        
+    print(model)
     criterion = ConLoss(temperature=opt.temp)
 
     if torch.cuda.is_available():
@@ -314,6 +284,7 @@ def _train(images, labels, model, criterion, epoch, bsz, opt):
                     loss += criterion(features)
                 # SelfCon
                 else:
+            
                     loss += criterion(features, labels)
             else:
                 features = f2.unsqueeze(1)
@@ -425,11 +396,16 @@ def main():
    
     opt = parse_option()
 
+    data_config = yaml.safe_load(open(opt.data_cfg, 'r'))
+    for key, value in data_config.items():
+        if hasattr(opt, key):
+            setattr(opt, key, value)
+
     wandb.init(
         
         project=opt.project_name,
         name=opt.model_name,
-        id=f'{str(uuid5()[:5])}',
+        id=f'{str(uuid.uuid4())[:5]}',
         config = opt
     )
     
@@ -470,7 +446,7 @@ def main():
         time1 = time.time()
         loss = train(train_loader, model, criterion, optimizer, epoch, opt)
         time2 = time.time()
-        print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
+        print('epoch {}, total time {:.2f}, loss {:.3f}'.format(epoch, time2 - time1, loss))
 
         if opt.save_freq:
             if epoch % opt.save_freq == 0:
