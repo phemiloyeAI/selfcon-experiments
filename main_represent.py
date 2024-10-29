@@ -44,9 +44,18 @@ def parse_option():
 
     # dataset
     parser.add_argument('--dataset_name', type=str, default='cifar10', choices=['cub', 'flowers', 'aircraft', 'car', 'cifar10', 'cifar100', 'tinyimagenet', 'imagenet', 'imagenet100'])
-    parser.add_argument('--data_folder', type=str, default='dataset_names/')
+    parser.add_argument('--data_cfg', type=str, default='configs/datasets/flowers.yml')
     parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--num_workers', type=int, default=16)
+    
+    parser.add_argument('--df_train', type=str, default='train.csv', help='Path to the training dataset CSV file.')
+    parser.add_argument('--df_trainval', type=str, default='train_val.csv', help='Path to the train-validation dataset CSV file.')
+    parser.add_argument('--df_val', type=str, default='val.csv', help='Path to the validation dataset CSV file.')
+    parser.add_argument('--df_test', type=str, default='test.csv', help='Path to the test dataset CSV file.')
+
+    parser.add_argument('--folder_train', type=str, default='jpg', help='Folder path for training images.')
+    parser.add_argument('--folder_val', type=str, default='jpg', help='Folder path for validation images.')
+    parser.add_argument('--folder_test', type=str, default='jpg', help='Folder path for test images.')
 
     # model
     parser.add_argument('--model', type=str, default='resnet50')
@@ -193,7 +202,7 @@ def build_dataloader(opt):
         transform += [transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
                       transforms.RandomGrayscale(p=0.2)]
 
-    if opt.dataset_name in ['cub', 'aircraft', 'flowers']:
+    if opt.dataset_name in ['cub', 'aircraft', 'flowers', 'car']:
       transform += [normalize]
     else:
       transform += [transforms.ToTensor(), normalize]
@@ -204,8 +213,6 @@ def build_dataloader(opt):
     if opt.multiview:
         train_transform = TwoCropTransform(train_transform)
     
-
-
     train_dataset = get_set(opt, split='train', transform=train_transform)
 
     # if opt.dataset_name == 'cub':
@@ -243,7 +250,6 @@ def build_dataloader(opt):
         num_workers=opt.num_workers, pin_memory=True, sampler=None)
 
     return train_loader
-
 
 def set_model(opt):
     model_kwargs = {'name': opt.model, 
@@ -415,7 +421,6 @@ def train(train_loader, model, criterion, optimizer, epoch, opt):
 
     return losses.avg
 
-    
 def main():
    
     opt = parse_option()
@@ -432,8 +437,6 @@ def main():
     random.seed(opt.seed)
     torch.manual_seed(opt.seed)
     torch.cuda.manual_seed(opt.seed)
-#     cudnn.deterministic = True
-    
 
     # build model and criterion
     model, criterion, opt = set_model(opt)
