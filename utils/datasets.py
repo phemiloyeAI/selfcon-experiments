@@ -9,9 +9,11 @@ import torch.utils.data as data
 from torchvision import datasets
 
 
+
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 def get_set(args, split, transform=None):
+
     if args.dataset_name == 'cifar10':
         ds = datasets.CIFAR10(root=args.dataset_root_path,
                               train=True if split == 'train' else False,
