@@ -83,7 +83,9 @@ class ResNet(nn.Module):
         self.in_channel = in_channel
         self.dataset = dataset
 
-        self.large = False if dataset in ['cifar10', 'cifar100', 'tinyimagenet', 'flowers'] else True
+        self.large = False if dataset in ['cifar10', 'cifar100', 'tinyimagenet', 'flowers',
+                                          'cub', 'aircraft', 'cars'] else True
+        
         if not self.large:
             self.conv1 = nn.Conv2d(in_channel, 64, kernel_size=3, stride=1, padding=1, bias=False)
         else:
