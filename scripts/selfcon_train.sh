@@ -9,7 +9,7 @@ size="fc"
 pos="[False,True,False]"
 bsz="32" #1024
 lr="0.005"  #0.5
-label="True"
+label="False"
 multiview="False" #False
 
 python main_represent.py --exp_name "${arch}_${size}_${pos}" \
