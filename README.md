@@ -45,6 +45,15 @@ To train, run the selfcon_train script, which deoes the pretraining and linear e
 * Sangmin Bae: bsmn0223@kaist.ac.kr
 * Sungnyun Kim: ksn4397@kaist.ac.kr
 
+## Cite Authors
+```
+@article{bae2021self,
+  title={Self-Contrastive Learning: Single-viewed Supervised Contrastive Framework using Sub-network},
+  author={Bae, Sangmin and Kim, Sungnyun and Ko, Jongwoo and Lee, Gihun and Noh, Seungjong and Yun, Se-Young},
+  journal={arXiv preprint arXiv:2106.15499},
+  year={2021}
+}
+```
 
 ## Notes 
 * Multiview benefits small batch size 
